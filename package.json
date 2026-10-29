@@ -1,13 +1,12 @@
 {
   "name": "messagner",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "prebuild": "node scripts/repair-page.mjs && node scripts/fix-auth.mjs",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.75.0",
@@ -16,9 +15,11 @@
     "react-dom": "19.1.0"
   },
   "devDependencies": {
-    "typescript": "^5.7.3",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
-    "@types/react-dom": "^19.0.0"
+    "@types/react-dom": "^19.0.0",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "15.5.7",
+    "typescript": "^5.7.3"
   }
 }
