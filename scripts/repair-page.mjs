@@ -1,10 +1,9 @@
 import { readFileSync, writeFileSync } from "node:fs";
 
 const path = "app/page.tsx";
-const text = readFileSync(path, "utf8");
-if (text.includes("__MESSAGNER_RENDERER_REPAIRED__")) process.exit(0);
+let text = readFileSync(path, "utf8");
 
-const replacement = `        <div className="message-area">
+const rendererReplacement = `        <div className="message-area">
           {visibleMessages.length === 0 && <div className="chat-empty">Say hello 👋</div>}
           {visibleMessages.map(message => {
             const mine = message.sender_id === session.user.id;
@@ -36,6 +35,75 @@ const replacement = `        <div className="message-area">
         <span className="__MESSAGNER_RENDERER_REPAIRED__" hidden />
         {replying &&`;
 
-const pattern = /        <div className="message-area">.*?\n        \{replying &&/s;
-if (!pattern.test(text)) throw new Error("message renderer block not found");
-writeFileSync(path, text.replace(pattern, replacement));
+const rendererPattern = /        <div className="message-area">.*?\n        \{replying &&/s;
+if (rendererPattern.test(text)) text = text.replace(rendererPattern, rendererReplacement);
+
+const startChatReplacement = `  async function startChat(other: Profile) {
+    if (!session?.user || !other?.id || other.id === session.user.id) return;
+    const currentId = session.user.id;
+    const [userA, userB] = [currentId, other.id].sort();
+    setError("");
+    const { data: existing, error: lookupError } = await supabase
+      .from("conversations")
+      .select("*")
+      .eq("kind", "direct")
+      .or(\`and(user_a.eq.\${userA},user_b.eq.\${userB}),and(user_a.eq.\${userB},user_b.eq.\${userA})\`)
+      .limit(1)
+      .maybeSingle();
+    if (lookupError) { setError(lookupError.message); return; }
+    let conversation = existing;
+    if (!conversation) {
+      const { data, error: createError } = await supabase
+        .from("conversations")
+        .insert({ user_a: userA, user_b: userB, kind: "direct", created_by: currentId })
+        .select("*")
+        .single();
+      if (createError || !data) { setError(createError?.message || "Could not create conversation."); return; }
+      conversation = data;
+    }
+    setSearch("");
+    setUsers([]);
+    const hydrated = { ...conversation, other } as Conversation;
+    setConversations(prev => [hydrated, ...prev.filter(item => item.id !== hydrated.id)]);
+    await openConversation(hydrated);
+  }
+
+  async function createGroup() {`;
+
+const startChatPattern = /  async function startChat\(other: Profile\) \{.*?\n  async function createGroup\(\) \{/s;
+if (!startChatPattern.test(text)) throw new Error("startChat block not found");
+text = text.replace(startChatPattern, startChatReplacement);
+
+const createGroupReplacement = `  async function createGroup() {
+    if (!session?.user || !groupName.trim() || groupUsers.length === 0) return;
+    setError("");
+    const { data: conversation, error: createError } = await supabase
+      .from("conversations")
+      .insert({ user_a: session.user.id, user_b: null, kind: "group", name: groupName.trim(), created_by: session.user.id })
+      .select("*")
+      .single();
+    if (createError || !conversation) { setError(createError?.message || "Could not create group."); return; }
+    const members = [{ conversation_id: conversation.id, user_id: session.user.id, role: "admin" }, ...groupUsers.map(user => ({ conversation_id: conversation.id, user_id: user.id, role: "member" }))];
+    const { error: memberError } = await supabase.from("group_members").insert(members);
+    if (memberError) {
+      await supabase.from("conversations").delete().eq("id", conversation.id);
+      setError(memberError.message);
+      return;
+    }
+    const hydrated = { ...conversation } as Conversation;
+    setConversations(prev => [hydrated, ...prev.filter(item => item.id !== hydrated.id)]);
+    setNewGroup(false);
+    setGroupName("");
+    setGroupUsers([]);
+    setGroupCandidates([]);
+    setGroupSearch("");
+    await openConversation(hydrated);
+  }
+
+  async function sendMessage`;
+
+const createGroupPattern = /  async function createGroup\(\) \{.*?\n  async function sendMessage/s;
+if (!createGroupPattern.test(text)) throw new Error("createGroup block not found");
+text = text.replace(createGroupPattern, createGroupReplacement);
+
+writeFileSync(path, text);
