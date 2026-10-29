@@ -43,6 +43,9 @@ export default function Home() {
   const [sessionReady, setSessionReady] = useState(false)
   const [userId, setUserId] = useState<string | null>(null)
   const [profile, setProfile] = useState<Profile | null>(null)
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login')
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [search, setSearch] = useState('')
@@ -72,17 +75,11 @@ export default function Home() {
     let mounted = true
     const boot = async () => {
       const { data: { session } } = await supabase.auth.getSession()
-      if (!session) {
-        const { data, error: authError } = await supabase.auth.signInAnonymously()
-        if (authError) {
-          if (mounted) setError(authError.message)
-          return
-        }
-        if (mounted) setUserId(data.user?.id || null)
-      } else if (mounted) {
-        setUserId(session.user.id)
+      if (mounted) {
+        setUserId(session?.user.id || null)
+        setLoading(false)
+        setSessionReady(true)
       }
-      if (mounted) setSessionReady(true)
     }
     boot()
     const { data: listener } = supabase.auth.onAuthStateChange((_event, next) => {
@@ -95,7 +92,10 @@ export default function Home() {
   }, [])
 
   useEffect(() => {
-    if (!userId) return
+    if (!userId) {
+      setProfile(null)
+      return
+    }
     let mounted = true
     const load = async () => {
       setLoading(true)
@@ -163,10 +163,7 @@ export default function Home() {
   }
 
   const loadMessages = async (conversationId: string) => {
-    const [{ data: messageData, error: messageError }, { data: reactionData }] = await Promise.all([
-      supabase.from('m2_messages').select('*').eq('conversation_id', conversationId).is('deleted_at', null).order('created_at', { ascending: true }),
-      supabase.from('m2_reactions').select('*').in('message_id', (messages || []).map(message => message.id))
-    ])
+    const { data: messageData, error: messageError } = await supabase.from('m2_messages').select('*').eq('conversation_id', conversationId).is('deleted_at', null).order('created_at', { ascending: true })
     if (messageError) {
       setError(messageError.message)
       return
@@ -177,27 +174,65 @@ export default function Home() {
       const { data } = await supabase.from('m2_reactions').select('*').in('message_id', loadedMessages.map(message => message.id))
       setReactionRows(data || [])
     } else {
-      setReactionRows(reactionData || [])
+      setReactionRows([])
     }
   }
 
-  const createProfile = async (event: FormEvent) => {
+  const signIn = async (event: FormEvent) => {
     event.preventDefault()
-    if (!userId) return
+    setBusy(true)
+    setError('')
+    const { data, error: authError } = await supabase.auth.signInWithPassword({ email: email.trim(), password })
+    setBusy(false)
+    if (authError) {
+      setError(authError.message)
+      return
+    }
+    setUserId(data.user?.id || null)
+  }
+
+  const createAccount = async (event: FormEvent) => {
+    event.preventDefault()
     const normalized = username.trim().toLowerCase()
     if (!/^[a-z0-9_]{3,32}$/.test(normalized)) {
       setError('Username must be 3-32 characters using letters, numbers, or underscores.')
       return
     }
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters.')
+      return
+    }
     setBusy(true)
     setError('')
-    const { data, error: profileError } = await supabase.from('m2_profiles').insert({ id: userId, username: normalized, display_name: displayName.trim() || normalized }).select().single()
+    const { data, error: authError } = await supabase.auth.signUp({
+      email: email.trim(),
+      password,
+      options: { data: { username: normalized, display_name: displayName.trim() || normalized } }
+    })
+    if (authError) {
+      setBusy(false)
+      setError(authError.message)
+      return
+    }
+    if (!data.user) {
+      setBusy(false)
+      setError('Unable to create the account.')
+      return
+    }
+    if (!data.session) {
+      setBusy(false)
+      setError('Account created. Check your email to confirm the account, then log in.')
+      setAuthMode('login')
+      return
+    }
+    const { data: profileData, error: profileError } = await supabase.from('m2_profiles').insert({ id: data.user.id, username: normalized, display_name: displayName.trim() || normalized }).select().single()
     setBusy(false)
     if (profileError) {
       setError(profileError.code === '23505' ? 'That username is already taken.' : profileError.message)
       return
     }
-    setProfile(data)
+    setUserId(data.user.id)
+    setProfile(profileData)
   }
 
   useEffect(() => {
@@ -271,21 +306,65 @@ export default function Home() {
     setProfile(null)
     setActive(null)
     setConversations([])
+    setEmail('')
+    setPassword('')
   }
 
   if (!sessionReady || loading) return <main className="splash">Messagner</main>
+
+  if (!userId) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-card">
+          <div className="brand-mark">M</div>
+          <h1>{authMode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
+          <p>{authMode === 'login' ? 'Log in to continue to your private messenger.' : 'Create your Messagner account with a unique username.'}</p>
+          <div className="auth-tabs">
+            <button className={authMode === 'login' ? 'active' : ''} onClick={() => { setAuthMode('login'); setError('') }}>Log in</button>
+            <button className={authMode === 'signup' ? 'active' : ''} onClick={() => { setAuthMode('signup'); setError('') }}>Sign up</button>
+          </div>
+          <form onSubmit={authMode === 'login' ? signIn : createAccount} className="stack">
+            <label>Email<input type="email" value={email} onChange={event => setEmail(event.target.value)} placeholder="you@example.com" autoComplete={authMode === 'login' ? 'email' : 'email'} /></label>
+            <label>Password<input type="password" value={password} onChange={event => setPassword(event.target.value)} placeholder="••••••••" autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} /></label>
+            {authMode === 'signup' && <>
+              <label>Username<input value={username} onChange={event => setUsername(event.target.value)} placeholder="your_username" autoCapitalize="none" autoCorrect="off" /></label>
+              <label>Display name<input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder="Your name" /></label>
+            </>}
+            <button className="primary" disabled={busy}>{busy ? (authMode === 'login' ? 'Logging in…' : 'Creating account…') : (authMode === 'login' ? 'Log in' : 'Create account')}</button>
+          </form>
+          {error && <div className="error">{error}</div>}
+        </section>
+      </main>
+    )
+  }
 
   if (!profile) {
     return (
       <main className="auth-shell">
         <section className="auth-card">
           <div className="brand-mark">M</div>
-          <h1>Welcome to Messagner</h1>
-          <p>Your private messenger, rebuilt cleanly from the ground up.</p>
-          <form onSubmit={createProfile} className="stack">
+          <h1>Choose your username</h1>
+          <p>This account is authenticated. Finish setting up your Messagner profile.</p>
+          <form onSubmit={async event => {
+            event.preventDefault()
+            const normalized = username.trim().toLowerCase()
+            if (!/^[a-z0-9_]{3,32}$/.test(normalized)) {
+              setError('Username must be 3-32 characters using letters, numbers, or underscores.')
+              return
+            }
+            setBusy(true)
+            setError('')
+            const { data, error: profileError } = await supabase.from('m2_profiles').insert({ id: userId, username: normalized, display_name: displayName.trim() || normalized }).select().single()
+            setBusy(false)
+            if (profileError) {
+              setError(profileError.code === '23505' ? 'That username is already taken.' : profileError.message)
+              return
+            }
+            setProfile(data)
+          }} className="stack">
             <label>Username<input value={username} onChange={event => setUsername(event.target.value)} placeholder="your_username" autoCapitalize="none" autoCorrect="off" /></label>
             <label>Display name<input value={displayName} onChange={event => setDisplayName(event.target.value)} placeholder="Your name" /></label>
-            <button className="primary" disabled={busy}>{busy ? 'Creating…' : 'Create account'}</button>
+            <button className="primary" disabled={busy}>{busy ? 'Saving…' : 'Continue'}</button>
           </form>
           {error && <div className="error">{error}</div>}
         </section>
